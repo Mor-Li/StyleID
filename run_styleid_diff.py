@@ -1,4 +1,5 @@
-import argparse, os
+import argparse
+import os
 import torch
 import numpy as np
 from omegaconf import OmegaConf
@@ -18,6 +19,7 @@ import time
 import pickle
 
 import matplotlib.pyplot as plt  # 新增导入 matplotlib 库
+from tqdm import tqdm  # 新增导入 tqdm 库
 
 feat_maps = []
 
@@ -64,11 +66,11 @@ def load_img(path):
     return 2.*image - 1.
 
 def adain(cnt_feat, sty_feat):
-    cnt_mean = cnt_feat.mean(dim=[0, 2, 3],keepdim=True)
-    cnt_std = cnt_feat.std(dim=[0, 2, 3],keepdim=True)
-    sty_mean = sty_feat.mean(dim=[0, 2, 3],keepdim=True)
-    sty_std = sty_feat.std(dim=[0, 2, 3],keepdim=True)
-    output = ((cnt_feat-cnt_mean)/cnt_std)*sty_std + sty_mean
+    cnt_mean = cnt_feat.mean(dim=[0, 2, 3], keepdim=True)
+    cnt_std = cnt_feat.std(dim=[0, 2, 3], keepdim=True)
+    sty_mean = sty_feat.mean(dim=[0, 2, 3], keepdim=True)
+    sty_std = sty_feat.std(dim=[0, 2, 3], keepdim=True)
+    output = ((cnt_feat - cnt_mean) / cnt_std) * sty_std + sty_mean
     return output
 
 def load_model_from_config(config, ckpt, verbose=False):
@@ -92,26 +94,26 @@ def load_model_from_config(config, ckpt, verbose=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cnt', default = './data/cnt')
-    parser.add_argument('--sty', default = './data/sty')
-    parser.add_argument('--ddim_inv_steps', type=int, default=50, help='DDIM eta')
-    parser.add_argument('--save_feat_steps', type=int, default=50, help='DDIM eta')
-    parser.add_argument('--start_step', type=int, default=49, help='DDIM eta')
+    parser.add_argument('--cnt', default='./data/cnt', help='Directory path to content images')
+    parser.add_argument('--sty', default='./data/sty', help='Directory path to style images')
+    parser.add_argument('--ddim_inv_steps', type=int, default=50, help='DDIM inversion steps')
+    parser.add_argument('--save_feat_steps', type=int, default=50, help='Steps to save features')
+    parser.add_argument('--start_step', type=int, default=49, help='Start step for feature injection')
     parser.add_argument('--ddim_eta', type=float, default=0.0, help='DDIM eta')
-    parser.add_argument('--H', type=int, default=512, help='image height, in pixel space')
-    parser.add_argument('--W', type=int, default=512, help='image width, in pixel space')
-    parser.add_argument('--C', type=int, default=4, help='latent channels')
-    parser.add_argument('--f', type=int, default=8, help='downsampling factor')
-    parser.add_argument('--T', type=float, default=1.5, help='attention temperature scaling hyperparameter')
-    parser.add_argument('--gamma', type=float, default=0.75, help='query preservation hyperparameter')
-    parser.add_argument("--attn_layer", type=str, default='6,7,8,9,10,11', help='injection attention feature layers')
-    parser.add_argument('--model_config', type=str, default='models/ldm/stable-diffusion-v1/v1-inference.yaml', help='model config')
-    parser.add_argument('--precomputed', type=str, default='./precomputed_feats', help='save path for precomputed feature')
-    parser.add_argument('--ckpt', type=str, default='models/ldm/stable-diffusion-v1/model.ckpt', help='model checkpoint')
-    parser.add_argument('--precision', type=str, default='autocast', help='choices: ["full", "autocast"]')
-    parser.add_argument('--output_path', type=str, default='output')
-    parser.add_argument("--without_init_adain", action='store_true')
-    parser.add_argument("--without_attn_injection", action='store_true')
+    parser.add_argument('--H', type=int, default=512, help='Image height in pixels')
+    parser.add_argument('--W', type=int, default=512, help='Image width in pixels')
+    parser.add_argument('--C', type=int, default=4, help='Latent channels')
+    parser.add_argument('--f', type=int, default=8, help='Downsampling factor')
+    parser.add_argument('--T', type=float, default=1.5, help='Attention temperature scaling hyperparameter')
+    parser.add_argument('--gamma', type=float, default=0.75, help='Query preservation hyperparameter')
+    parser.add_argument("--attn_layer", type=str, default='6,7,8,9,10,11', help='Injection attention feature layers')
+    parser.add_argument('--model_config', type=str, default='models/ldm/stable-diffusion-v1/v1-inference.yaml', help='Model config file')
+    parser.add_argument('--precomputed', type=str, default='./precomputed_feats', help='Save path for precomputed features')
+    parser.add_argument('--ckpt', type=str, default='models/ldm/stable-diffusion-v1/model.ckpt', help='Model checkpoint file')
+    parser.add_argument('--precision', type=str, default='autocast', help='Precision mode: "full" or "autocast"')
+    parser.add_argument('--output_path', type=str, default='output', help='Directory to save output images')
+    parser.add_argument("--without_init_adain", action='store_true', help='Do not apply initial AdaIN')
+    parser.add_argument("--without_attn_injection", action='store_true', help='Do not apply attention injection')
     opt = parser.parse_args()
 
     feat_path_root = opt.precomputed
@@ -133,7 +135,7 @@ def main():
     model = model.to(device)
     unet_model = model.model.diffusion_model
     sampler = DDIMSampler(model)
-    sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=opt.ddim_eta, verbose=False) 
+    sampler.make_schedule(ddim_num_steps=ddim_steps, ddim_eta=opt.ddim_eta, verbose=False)
     time_range = np.flip(sampler.ddim_timesteps)
     idx_time_dict = {}
     time_idx_dict = {}
@@ -169,7 +171,7 @@ def main():
             block_idx += 1
 
     def save_feature_maps_callback(i):
-        save_feature_maps(unet_model.output_blocks , i, "output_block")
+        save_feature_maps(unet_model.output_blocks, i, "output_block")
 
     def save_feature_map(feature_map, filename, time):
         global feat_maps
@@ -177,17 +179,24 @@ def main():
         feat_maps[cur_idx][f"{filename}"] = feature_map
 
     start_step = opt.start_step
-    precision_scope = autocast if opt.precision=="autocast" else nullcontext
+    precision_scope = autocast if opt.precision == "autocast" else nullcontext
     uc = model.get_learned_conditioning([""])
     shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
     sty_img_list = sorted(os.listdir(opt.sty))
     cnt_img_list = sorted(os.listdir(opt.cnt))
 
     begin = time.time()
-    for sty_name in sty_img_list:
+
+    # 使用 tqdm 为风格图像和内容图像添加进度条
+    for sty_name in tqdm(sty_img_list, desc='Processing styles'):
         sty_name_ = os.path.join(opt.sty, sty_name)
         # 加载风格图像的原始PIL图像
-        sty_pil = Image.open(sty_name_).convert("RGB")
+        try:
+            sty_pil = Image.open(sty_name_).convert("RGB")
+        except Exception as e:
+            print(f"Error loading style image {sty_name_}: {e}")
+            continue  # 跳过无法加载的图像
+
         init_sty = load_img(sty_name_).to(device)
         seed = -1
         sty_feat_name = os.path.join(feat_path_root, os.path.basename(sty_name).split('.')[0] + '_sty.pkl')
@@ -200,19 +209,42 @@ def main():
                 sty_z_enc = torch.clone(sty_feat[0]['z_enc'])
         else:
             init_sty = model.get_first_stage_encoding(model.encode_first_stage(init_sty))
-            sty_z_enc, _ = sampler.encode_ddim(init_sty.clone(), num_steps=ddim_inversion_steps, unconditional_conditioning=uc, \
-                                                end_step=time_idx_dict[ddim_inversion_steps-1-start_step], \
-                                                callback_ddim_timesteps=save_feature_timesteps,
-                                                img_callback=ddim_sampler_callback)
+            sty_z_enc, _ = sampler.encode_ddim(
+                init_sty.clone(),
+                num_steps=ddim_inversion_steps,
+                unconditional_conditioning=uc,
+                end_step=time_idx_dict[ddim_inversion_steps - 1 - start_step],
+                callback_ddim_timesteps=save_feature_timesteps,
+                img_callback=ddim_sampler_callback
+            )
             sty_feat = copy.deepcopy(feat_maps)
             sty_z_enc = feat_maps[0]['z_enc']
 
-        for cnt_name in cnt_img_list:
+        # 使用 tqdm 为内容图像添加进度条
+        for cnt_name in tqdm(cnt_img_list, desc='  Processing contents', leave=False):
             cnt_name_ = os.path.join(opt.cnt, cnt_name)
+            # 生成输出文件名
+            base_cnt = os.path.basename(cnt_name).split('.')[0]
+            base_sty = os.path.basename(sty_name).split('.')[0]
+            output_image_name = f"{base_cnt}_stylized_{base_sty}_output.png"
+            combined_image_name = f"{base_cnt}_stylized_{base_sty}_compare.png"
+            output_image_path = os.path.join(output_path, output_image_name)
+            combined_image_path = os.path.join(output_path, combined_image_name)
+
+            # 检查组合图像文件是否已经存在
+            if os.path.exists(combined_image_path):
+                print(f"Combined output already exists for {cnt_name} and {sty_name}, skipping...")
+                continue  # 跳过当前循环，处理下一个内容-风格对
+
             # 加载内容图像的原始PIL图像
-            cnt_pil = Image.open(cnt_name_).convert("RGB")
+            try:
+                cnt_pil = Image.open(cnt_name_).convert("RGB")
+            except Exception as e:
+                print(f"Error loading content image {cnt_name_}: {e}")
+                continue  # 跳过无法加载的图像
+
             init_cnt = load_img(cnt_name_).to(device)
-            cnt_feat_name = os.path.join(feat_path_root, os.path.basename(cnt_name).split('.')[0] + '_cnt.pkl')
+            cnt_feat_name = os.path.join(feat_path_root, base_cnt + '_cnt.pkl')
             cnt_feat = None
 
             # ddim inversion encoding
@@ -223,10 +255,14 @@ def main():
                     cnt_z_enc = torch.clone(cnt_feat[0]['z_enc'])
             else:
                 init_cnt = model.get_first_stage_encoding(model.encode_first_stage(init_cnt))
-                cnt_z_enc, _ = sampler.encode_ddim(init_cnt.clone(), num_steps=ddim_inversion_steps, unconditional_conditioning=uc, \
-                                                    end_step=time_idx_dict[ddim_inversion_steps-1-start_step], \
-                                                    callback_ddim_timesteps=save_feature_timesteps,
-                                                    img_callback=ddim_sampler_callback)
+                cnt_z_enc, _ = sampler.encode_ddim(
+                    init_cnt.clone(),
+                    num_steps=ddim_inversion_steps,
+                    unconditional_conditioning=uc,
+                    end_step=time_idx_dict[ddim_inversion_steps - 1 - start_step],
+                    callback_ddim_timesteps=save_feature_timesteps,
+                    img_callback=ddim_sampler_callback
+                )
                 cnt_feat = copy.deepcopy(feat_maps)
                 cnt_z_enc = feat_maps[0]['z_enc']
 
@@ -234,9 +270,7 @@ def main():
                 with precision_scope("cuda"):
                     with model.ema_scope():
                         # inversion
-                        output_name = f"{os.path.basename(cnt_name).split('.')[0]}_stylized_{os.path.basename(sty_name).split('.')[0]}.png"
-
-                        print(f"Inversion end: {time.time() - begin}")
+                        print(f"Inversion end: {time.time() - begin:.2f} seconds")
                         if opt.without_init_adain:
                             adain_z_enc = cnt_z_enc
                         else:
@@ -246,16 +280,17 @@ def main():
                             feat_maps = None
 
                         # inference
-                        samples_ddim, intermediates = sampler.sample(S=ddim_steps,
-                                                        batch_size=1,
-                                                        shape=shape,
-                                                        verbose=False,
-                                                        unconditional_conditioning=uc,
-                                                        eta=opt.ddim_eta,
-                                                        x_T=adain_z_enc,
-                                                        injected_features=feat_maps,
-                                                        start_step=start_step,
-                                                        )
+                        samples_ddim, intermediates = sampler.sample(
+                            S=ddim_steps,
+                            batch_size=1,
+                            shape=shape,
+                            verbose=False,
+                            unconditional_conditioning=uc,
+                            eta=opt.ddim_eta,
+                            x_T=adain_z_enc,
+                            injected_features=feat_maps,
+                            start_step=start_step,
+                        )
 
                         x_samples_ddim = model.decode_first_stage(samples_ddim)
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
@@ -264,7 +299,9 @@ def main():
                         x_sample = 255. * rearrange(x_image_torch[0].cpu().numpy(), 'c h w -> h w c')
                         img = Image.fromarray(x_sample.astype(np.uint8))
 
-                        # 这里替换原有的保存逻辑，使用 matplotlib 保存三个图像
+                        # 单独保存效果图
+                        img.save(output_image_path)
+
                         # 将内容图像、风格图像和输出图像转换为numpy数组
                         content_np = np.array(cnt_pil).astype(np.float32) / 255.0
                         style_np = np.array(sty_pil).astype(np.float32) / 255.0
@@ -288,9 +325,9 @@ def main():
                         axes[2].set_title('Output Image')
                         axes[2].axis('off')
 
-                        # 调整布局并保存图像
+                        # 调整布局并保存组合图像
                         plt.tight_layout()
-                        plt.savefig(os.path.join(output_path, output_name))
+                        plt.savefig(combined_image_path)
                         plt.close()
 
                         if len(feat_path_root) > 0:
@@ -302,7 +339,7 @@ def main():
                                 with open(sty_feat_name, 'wb') as h:
                                     pickle.dump(sty_feat, h)
 
-    print(f"Total end: {time.time() - begin}")
+    print(f"Total end: {time.time() - begin:.2f} seconds")
 
 if __name__ == "__main__":
     main()
