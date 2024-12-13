@@ -1,2 +1,6 @@
 __pycache__
 *.ckpt
+output/
+precomputed_feats/
+data/cnt/yujing.jpg
+src/
